@@ -4,11 +4,12 @@ import json
 import os
 import random
 import time
+import pandas as pd
 
 AUTHENTICATE = False 
 AUTHENTICATED_STATE_JSON = "state.json"
 DEFAULT_DELAY = 1
-DEFAULT_TIMEOUT = 20000 # 10 seconds
+DEFAULT_TIMEOUT = 20000 # 20 seconds
 
 def fetch_login_data(login_json):
     if os.path.isfile(login_json):
@@ -55,17 +56,6 @@ def login_via_google(context, new_page_info, login_data):
         new_page.frame_locator("[title='title=\"reCAPTCHA\"']").click()
     except Exception as e:
         print(f"Exception: No Google reCAPTCHA Pop Up - {e}")
-
-def fetch_post_info(page, post_url):
-    page.goto(post_url)
-    # PROBLEM == Getting first article NOT EQUAL Original Post
-    post_data_locator = page.locator("[data-testid=\"tweet\"]").first
-    soup = BeautifulSoup(post_data_locator.inner_html(), "html.parser")
-    profile_name = soup.select("a[class='css-175oi2r r-1pi2tsx r-13qz1uu r-o7ynqc r-6416eg r-1ny4l3l r-1loqt21']")[0]
-    print(profile_name["href"])
-
-    # Fetching 
-    time.sleep(DEFAULT_DELAY*3)
 
 def scrape_tweets():
     login_json = "twitter_burner_account_login.json"
@@ -133,24 +123,50 @@ def scrape_tweets():
         posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
         soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
         # Fetching all tags containing post links
-        post_links_a_tags = soup.select("a[href*=status]")
-        # Fetching all links
-        post_links_lst = [] 
-        for a_tag in post_links_a_tags:
-            if not "analytics" in a_tag["href"]:
-                post_links_lst.append(a_tag["href"])
-
-        with open("posts_links.txt", "w+", encoding="utf-8") as fd:
-            fd.write(str(post_links_lst))
-
-        # Starting to fetch each post information
+        post_info_a_tags = soup.select("a[href*=status]")
+        post_time_elements = soup.select("time")
+        # Fetches Replies | Reposts | Likes | Bookmarks | Views
+        post_views_elements = soup.select("div[role=\"group\"]")
+        # Fetching all links and infos
         base_url = "https://twitter.com"
-        post_info_lst = []
-        for post_link in post_links_lst:
-            post_url = base_url + post_link
-            post_info_lst.append(fetch_post_info(page, post_url))
+        post_links_lst     = [base_url+a_tag["href"] for a_tag in post_info_a_tags if not "analytics" in a_tag["href"]]
+        post_username_lst  = [a_tag["href"][1:a_tag["href"].find("/", 1)] for a_tag in post_info_a_tags if not "analytics" in a_tag["href"]]
+        post_date_lst      = [time_tag["datetime"][:time_tag["datetime"].find("T")] for time_tag in post_time_elements]
+        post_time_lst      = [time_tag["datetime"][time_tag["datetime"].find("T")+1:time_tag["datetime"].find(".")] for time_tag in post_time_elements]
+        post_replies_lst   = []
+        post_reposts_lst   = []
+        post_likes_lst     = []
+        post_bookmarks_lst = []
+        post_views_lst     = []
+        for a_tag in post_views_elements:
+            replies, reposts, likes, bookmarks, views = [0 for _ in range(5)]
+            # Checking if multiple elements
+            if ", " in a_tag["aria-label"]:
+                infos_lst = a_tag["aria-label"].split(", ")
+                for info in infos_lst:
+                    if "replie" in info:
+                        replies = int(info.split(" ")[0])  
+                    elif "repost" in info:
+                        reposts = int(info.split(" ")[0])
+                    elif "like" in info:
+                        likes = int(info.split(" ")[0])
+                    elif "bookmark" in info:
+                        bookmarks = int(info.split(" ")[0])
+                    elif "view" in info:
+                        views = int(info.split(" ")[0])    
+            post_replies_lst.append(replies)
+            post_reposts_lst.append(reposts)
+            post_likes_lst.append(likes)
+            post_bookmarks_lst.append(bookmarks)
+            post_views_lst.append(views)
 
-        time.sleep(10000)
+        # Compacting data into a dictionary
+        data_dict = {"url":post_links_lst, "username":post_username_lst, "date-post":post_date_lst, "time-post":post_time_lst, "replies":post_replies_lst, "reposts":post_reposts_lst, "likes":post_likes_lst, "bookmarks":post_bookmarks_lst, "views":post_views_lst}
+        print(data_dict)
+        df = pd.DataFrame(data_dict)
+        df.to_excel("posts_info.xlsx", index=False)
+
+        # time.sleep(10000)
 
         browser.close()
 
