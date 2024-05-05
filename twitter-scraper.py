@@ -1,19 +1,20 @@
 from playwright.sync_api import sync_playwright, expect
+from bs4 import BeautifulSoup 
 import json
 import os
 import random
 import time
 
-AUTHENTICATE = True
+AUTHENTICATE = False 
 AUTHENTICATED_STATE_JSON = "state.json"
-DEFAULT_TIMEOUT = 5000 # 5 seconds
+DEFAULT_DELAY = 1
+DEFAULT_TIMEOUT = 20000 # 10 seconds
 
 def fetch_login_data(login_json):
     if os.path.isfile(login_json):
         with open(login_json, "r", encoding="utf-8") as fd:
             login_data = json.load(fd)
             return login_data
-
 
 def random_ua(k=1):
     # returns a random useragent from the latest user agents strings list, weighted
@@ -41,12 +42,12 @@ def login_via_google(context, new_page_info, login_data):
     new_page = new_page_info.value
     new_page.wait_for_load_state()
     new_page.get_by_role("textbox").fill(login_data["email"])
-    time.sleep(3)
+    time.sleep(DEFAULT_DELAY)
     new_page.keyboard.press("Enter")
     # Delay between email and password
-    time.sleep(3)
+    time.sleep(DEFAULT_DELAY)
     new_page.get_by_role("textbox").fill(login_data["password"])
-    time.sleep(3)
+    time.sleep(DEFAULT_DELAY)
     new_page.keyboard.press("Enter")
 
     # Captcha
@@ -55,14 +56,21 @@ def login_via_google(context, new_page_info, login_data):
     except Exception as e:
         print(f"Exception: No Google reCAPTCHA Pop Up - {e}")
 
-    # Save storage state into the file.
-    context.storage_state(path=AUTHENTICATED_STATE_JSON)
+def fetch_post_info(page, post_url):
+    page.goto(post_url)
+    # PROBLEM == Getting first article NOT EQUAL Original Post
+    post_data_locator = page.locator("[data-testid=\"tweet\"]").first
+    soup = BeautifulSoup(post_data_locator.inner_html(), "html.parser")
+    profile_name = soup.select("a[class='css-175oi2r r-1pi2tsx r-13qz1uu r-o7ynqc r-6416eg r-1ny4l3l r-1loqt21']")[0]
+    print(profile_name["href"])
+
+    # Fetching 
+    time.sleep(DEFAULT_DELAY*3)
 
 def scrape_tweets():
     login_json = "twitter_burner_account_login.json"
     with sync_playwright() as p:
         # Opening Browser context with random User Agent
-        url = "https://twitter.com/i/flow/login"
         user_agent = random_ua()[0]
         args = ["--disable-blink-features=AutomationControlled", "--disable-dev-shm-usage"]
         ignore_default_args = ["--disable-component-extensions-with-background-pages"]
@@ -74,8 +82,10 @@ def scrape_tweets():
         # Default timeout to 5 seconds
         context.set_default_timeout(DEFAULT_TIMEOUT)
         page = context.new_page()
-        page.goto(url)
+        # If we need to login first
         if AUTHENTICATE:
+            url = "https://twitter.com/i/flow/login"
+            page.goto(url)
             logged_in = False
             login_data = fetch_login_data(login_json)
             try:
@@ -96,9 +106,52 @@ def scrape_tweets():
                     page.get_by_title('Botão \"Fazer login com o Google\"').click() # Opens a new tab
                 login_via_google(context, new_page_info, login_data)
 
+            time.sleep(DEFAULT_DELAY*15)
+            
+            # Save storage state into the file.
+            context.storage_state(path=AUTHENTICATED_STATE_JSON)
+
         # Redirect to home
-        page.goto("https://twitter.com/home")
+        url_explore = "https://twitter.com/explore" 
+        page.goto(url_explore)
+
+        # Search Query Input
+        time.sleep(DEFAULT_DELAY)
+    
+        search_input = page.get_by_role("combobox")
+        search_input.click()
+        search_input.fill("Que bacana essa pesquisa!")
+        page.keyboard.press("Enter")
+
+        time.sleep(DEFAULT_DELAY)
+        lastest_tab = page.get_by_text("Latest")
+        lastest_tab.click()
+
+        # Delay For Fetching Posts
+        time.sleep(DEFAULT_DELAY)
+        # Fetching All Posts Wrapper
+        posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
+        soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
+        # Fetching all tags containing post links
+        post_links_a_tags = soup.select("a[href*=status]")
+        # Fetching all links
+        post_links_lst = [] 
+        for a_tag in post_links_a_tags:
+            if not "analytics" in a_tag["href"]:
+                post_links_lst.append(a_tag["href"])
+
+        with open("posts_links.txt", "w+", encoding="utf-8") as fd:
+            fd.write(str(post_links_lst))
+
+        # Starting to fetch each post information
+        base_url = "https://twitter.com"
+        post_info_lst = []
+        for post_link in post_links_lst:
+            post_url = base_url + post_link
+            post_info_lst.append(fetch_post_info(page, post_url))
+
         time.sleep(10000)
+
         browser.close()
 
 def main():
