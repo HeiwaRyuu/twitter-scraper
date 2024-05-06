@@ -163,6 +163,7 @@ def scrape_tweets():
         df_keywords = df_keywords[df_keywords["collect"]=="s"]
         errors_lst = []
         for i, row in df_keywords.iterrows():
+            start_time = dt.datetime.now()
             attempts = 0
             success = False
             while attempts < MAX_ATTEMPTS:
@@ -240,7 +241,9 @@ def scrape_tweets():
                         time.sleep(DEFAULT_DELAY*2)
                 # Checking if collect went successfully
                 if success:
-                    print(f"Finished collecting all tweets from - Keyword: {row['keywords']}")
+                    end_time = dt.datetime.now()
+                    total_collect_time = start_time - end_time
+                    print(f"Finished collecting all tweets from - Keyword: {row['keywords']}\nTime Spent: {total_collect_time}")
                     break
             # If no errors
             if df_lst:
