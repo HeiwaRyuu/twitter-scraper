@@ -12,6 +12,7 @@ AUTHENTICATE = False
 AUTHENTICATED_STATE_JSON = "state.json"
 DEFAULT_DELAY = 1
 DEFAULT_TIMEOUT = 20000 # 20 seconds
+MAX_ATTEMPTS = 3
 
 def fetch_login_data(login_json):
     if os.path.isfile(login_json):
@@ -108,7 +109,7 @@ def extract_tweets_to_df(soup):
                     "likes":post_likes_lst, 
                     "bookmarks":post_bookmarks_lst, 
                     "views":post_views_lst}
-    print(data_dict)
+    # print(data_dict)
     
     df = pd.DataFrame(data_dict)
     return df
@@ -159,59 +160,98 @@ def scrape_tweets():
 
         # Redirect to home
         df_keywords = pd.read_excel("keywords.xlsx")
+        df_keywords = df_keywords[df_keywords["collect"]=="s"]
+        errors_lst = []
         for i, row in df_keywords.iterrows():
-            date_filter = "since:2020-10-09 until:2024-04-22"
-            search_str = f"{row['keywords']} {date_filter}"
-            print(f"Current search: {i} | {search_str}")
-            url_explore = "https://twitter.com/explore"
-            page.goto(url_explore)
+            attempts = 0
+            success = False
+            while attempts < MAX_ATTEMPTS:
+                date_filter = "since:2020-10-09 until:2024-04-22"
+                search_str = f"{row['keywords']} {date_filter}"
+                print(f"Current search: {i} | {search_str}")
+                url_explore = "https://twitter.com/explore"
+                page.goto(url_explore)
 
-            # Search Query Input
-            time.sleep(DEFAULT_DELAY)
-        
-            search_input = page.get_by_role("combobox")
-            search_input.click()
-            # time.sleep(10000)
-            search_input.fill(search_str)
-            page.keyboard.press("Enter")
-
-            time.sleep(DEFAULT_DELAY)
-            lastest_tab = page.get_by_text("Latest")
-            lastest_tab.click()
-
-            # Delay For Fetching Posts
-            time.sleep(DEFAULT_DELAY)
-            # Start infinite scrolling until we reach the end of the page
-            df_lst = []
-            prev_height = None
-            while True: #make the range as long as needed
-                # Fetching All Posts Wrapper
-                posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
-                soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
-                df_lst.append(extract_tweets_to_df(soup))
-                # Fetching current page height
-                curr_height = page.evaluate('(window.innerHeight + window.scrollY)')
-                # The first argument is horizontal scroll | second argument is vertical scroll (positive = down | negative = up)
-                page.mouse.wheel(0, 15000)
-                time.sleep(DEFAULT_DELAY*random.randint(10,30))
-                # Starting the scroll
-                if not prev_height:
-                    prev_height = curr_height
-                    time.sleep(DEFAULT_DELAY*2)
-                # Case where the scroll did not create any effects (meaning we have reached the end of the page)
-                elif prev_height == curr_height:
-                    break
-                # If we are mid scrolling and new content has appeared
-                else:
-                    prev_height = curr_height
-                    time.sleep(DEFAULT_DELAY*2)
+                # Search Query Input
+                time.sleep(DEFAULT_DELAY)
+                try:
+                    search_input = page.get_by_role("combobox")
+                    search_input.click()
+                    search_input.fill(search_str)
+                    page.keyboard.press("Enter")
+                except Exception as e:
+                    error_str = f"Exception: Search Query Input - N° of attempts: {attempts} - Keyword: {row['keywords']} - {e}"
+                    print(error_str)
+                    attempts += 1
+                    if attempts >= MAX_ATTEMPTS:
+                        errors_lst.append(error_str)
+                    continue
             
-            # Generating a single dataframe with all data
-            df = pd.concat(df_lst)
-            # Remove possible duplicates
-            df = df.drop_duplicates(subset=["url"])
-            df.to_excel(f"{os.getcwd()}\\coletas\\{row['keywords']}-{dt.datetime.now().strftime('%d-%m-%Y-%H-%M')}.xlsx", index=False)
+                # Latest Tweets Tab
+                time.sleep(DEFAULT_DELAY)
+                try:
+                    lastest_tab = page.get_by_text("Latest")
+                    lastest_tab.click()
+                except Exception as e:
+                    error_str = f"Exception: Latest Tweets Tab - N° of attempts: {attempts} - Keyword: {row['keywords']} - {e}"
+                    print(error_str)
+                    attempts += 1
+                    if attempts >= MAX_ATTEMPTS:
+                        errors_lst.append(error_str)
+                    continue
 
+                # Delay For Fetching Posts
+                time.sleep(DEFAULT_DELAY)
+                # Start infinite scrolling until we reach the end of the page
+                df_lst = []
+                prev_height = None
+                it_counter = 0
+                while True: #make the range as long as needed
+                    it_counter +=1
+                    print(f"Scroll Iterations Counter: {it_counter} | Keyword: {row['keywords']}")
+                    # Fetching All Posts Wrapper
+                    try:
+                        posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
+                        soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
+                        df_lst.append(extract_tweets_to_df(soup))
+                    except Exception as e:
+                        error_str = f"Exception: Fetching All Posts Wrapper - N° of attempts: {attempts} - Keyword: {row['keywords']} - {e}"
+                        print(error_str)
+                        attempts += 1
+                        if attempts >= MAX_ATTEMPTS:
+                            errors_lst.append(error_str)
+                        break
+                    # Fetching current page height
+                    curr_height = page.evaluate('(window.innerHeight + window.scrollY)')
+                    # The first argument is horizontal scroll | second argument is vertical scroll (positive = down | negative = up)
+                    page.mouse.wheel(0, 1000)
+                    time.sleep(DEFAULT_DELAY*random.randint(1,5))
+                    # Starting the scroll
+                    if not prev_height:
+                        prev_height = curr_height
+                        time.sleep(DEFAULT_DELAY*2)
+                    # Case where the scroll did not create any effects (meaning we have reached the end of the page) SUCCESS!
+                    elif prev_height == curr_height:
+                        success = True
+                        break
+                    # If we are mid scrolling and new content has appeared
+                    else:
+                        prev_height = curr_height
+                        time.sleep(DEFAULT_DELAY*2)
+                # Checking if collect went successfully
+                if success:
+                    print(f"Finished collecting all tweets from - Keyword: {row['keywords']}")
+                    break
+            # If no errors
+            if df_lst:
+                # Generating a single dataframe with all data
+                df = pd.concat(df_lst)
+                # Remove possible duplicates
+                df = df.drop_duplicates(subset=["url"])
+                df.to_excel(f"{os.getcwd()}\\coletas\\{row['keywords']}-{dt.datetime.now().strftime('%d-%m-%Y-%H-%M')}.xlsx", index=False)
+            if errors_lst:
+                with open(f"{os.getcwd()}\\coletas\\error_logs-{row['keywords']}.txt", "w+", encoding="utf-8") as fd:
+                    fd.writelines(errors_lst)
         browser.close()
 
 def main():
