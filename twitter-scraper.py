@@ -5,8 +5,10 @@ import os
 import random
 import time
 import pandas as pd
+import datetime as dt
+import random
 
-AUTHENTICATE = False 
+AUTHENTICATE = False
 AUTHENTICATED_STATE_JSON = "state.json"
 DEFAULT_DELAY = 1
 DEFAULT_TIMEOUT = 20000 # 20 seconds
@@ -39,16 +41,16 @@ def random_ua(k=1):
     "pct": {"0": 28.8, "1": 13.28, "2": 10.98, "3": 8.55, "4": 6.25, "5": 5.56, "6": 4.53, "7": 4.27, "8": 3.57, "9": 2.93, "10": 2.99, "11": 2.55, "12": 2.44, "13": 1.7, "14": 1.59}}
     return random.choices(list(ua_pct['ua'].values()), list(ua_pct['pct'].values()), k=k)
 
-def login_via_google(context, new_page_info, login_data):
+def login_via_google(new_page_info, login_data):
     new_page = new_page_info.value
     new_page.wait_for_load_state()
     new_page.get_by_role("textbox").fill(login_data["email"])
-    time.sleep(DEFAULT_DELAY)
+    time.sleep(DEFAULT_DELAY*5)
     new_page.keyboard.press("Enter")
     # Delay between email and password
-    time.sleep(DEFAULT_DELAY)
+    time.sleep(DEFAULT_DELAY*5)
     new_page.get_by_role("textbox").fill(login_data["password"])
-    time.sleep(DEFAULT_DELAY)
+    time.sleep(DEFAULT_DELAY*5)
     new_page.keyboard.press("Enter")
 
     # Captcha
@@ -56,6 +58,60 @@ def login_via_google(context, new_page_info, login_data):
         new_page.frame_locator("[title='title=\"reCAPTCHA\"']").click()
     except Exception as e:
         print(f"Exception: No Google reCAPTCHA Pop Up - {e}")
+
+def extract_tweets_to_df(soup):
+    # Fetching all tags containing post links
+    post_info_a_tags = [a_tag.parent for a_tag in soup.select("a > time")] # Fetching all <a> tags that have time as a child (they are the specific ones for the tweets in the page, this filters the responses and other non related tweets)
+    post_time_elements = soup.select("a > time")
+    # Fetches Replies | Reposts | Likes | Bookmarks | Views
+    post_views_elements = soup.select("div[role=\"group\"]")
+    # Fetching all links and infos
+    base_url = "https://twitter.com"
+    post_links_lst     = [base_url+a_tag["href"] for a_tag in post_info_a_tags if (not "analytics" in a_tag["href"]) and (a_tag["href"].count("/") == 3)] # Number 3 here, becauce we add +2 with base url, so not 5, in fact 3
+    post_username_lst  = [a_tag["href"][1:a_tag["href"].find("/", 1)] for a_tag in post_info_a_tags if (not "analytics" in a_tag["href"]) and (a_tag["href"].count("/") == 3)]
+    post_date_lst      = [time_tag["datetime"][:time_tag["datetime"].find("T")] for time_tag in post_time_elements]
+    post_time_lst      = [time_tag["datetime"][time_tag["datetime"].find("T")+1:time_tag["datetime"].find(".")] for time_tag in post_time_elements]
+    post_replies_lst   = []
+    post_reposts_lst   = []
+    post_likes_lst     = []
+    post_bookmarks_lst = []
+    post_views_lst     = []
+    for a_tag in post_views_elements:
+        replies, reposts, likes, bookmarks, views = [0 for _ in range(5)]
+        # Checking if multiple elements
+        if ", " in a_tag["aria-label"]:
+            infos_lst = a_tag["aria-label"].split(", ")
+            for info in infos_lst:
+                if "replie" in info:
+                    replies = int(info.split(" ")[0])  
+                elif "repost" in info:
+                    reposts = int(info.split(" ")[0])
+                elif "like" in info:
+                    likes = int(info.split(" ")[0])
+                elif "bookmark" in info:
+                    bookmarks = int(info.split(" ")[0])
+                elif "view" in info:
+                    views = int(info.split(" ")[0])    
+        post_replies_lst.append(replies)
+        post_reposts_lst.append(reposts)
+        post_likes_lst.append(likes)
+        post_bookmarks_lst.append(bookmarks)
+        post_views_lst.append(views)
+
+    # Compacting data into a dictionary
+    data_dict = {"url":post_links_lst, 
+                    "username":post_username_lst, 
+                    "post-date":post_date_lst, 
+                    "post-GMT-time":post_time_lst, 
+                    "replies":post_replies_lst, 
+                    "reposts":post_reposts_lst, 
+                    "likes":post_likes_lst, 
+                    "bookmarks":post_bookmarks_lst, 
+                    "views":post_views_lst}
+    print(data_dict)
+    
+    df = pd.DataFrame(data_dict)
+    return df
 
 def scrape_tweets():
     login_json = "twitter_burner_account_login.json"
@@ -84,7 +140,7 @@ def scrape_tweets():
                     # Get page after a specific action (e.g. clicking a link)
                     with context.expect_page() as new_page_info:
                         google_login_credentials_pop_up.get_by_text("Continuar").click()
-                    login_via_google(context, new_page_info, login_data)
+                    login_via_google(new_page_info, login_data)
                     logged_in = True
             except Exception as e:
                 print(f"Exception: No Google Credentials Pop Up - {e}")
@@ -94,79 +150,67 @@ def scrape_tweets():
                 # Login into account
                 with context.expect_page() as new_page_info:
                     page.get_by_title('Botão \"Fazer login com o Google\"').click() # Opens a new tab
-                login_via_google(context, new_page_info, login_data)
+                login_via_google(new_page_info, login_data)
 
-            time.sleep(DEFAULT_DELAY*15)
+            time.sleep(DEFAULT_DELAY*120)
             
             # Save storage state into the file.
             context.storage_state(path=AUTHENTICATED_STATE_JSON)
 
         # Redirect to home
-        url_explore = "https://twitter.com/explore" 
-        page.goto(url_explore)
+        df_keywords = pd.read_excel("keywords.xlsx")
+        for i, row in df_keywords.iterrows():
+            date_filter = "since:2020-10-09 until:2024-04-22"
+            search_str = f"{row['keywords']} {date_filter}"
+            print(f"Current search: {i} | {search_str}")
+            url_explore = "https://twitter.com/explore"
+            page.goto(url_explore)
 
-        # Search Query Input
-        time.sleep(DEFAULT_DELAY)
-    
-        search_input = page.get_by_role("combobox")
-        search_input.click()
-        search_input.fill("Que bacana essa pesquisa!")
-        page.keyboard.press("Enter")
+            # Search Query Input
+            time.sleep(DEFAULT_DELAY)
+        
+            search_input = page.get_by_role("combobox")
+            search_input.click()
+            # time.sleep(10000)
+            search_input.fill(search_str)
+            page.keyboard.press("Enter")
 
-        time.sleep(DEFAULT_DELAY)
-        lastest_tab = page.get_by_text("Latest")
-        lastest_tab.click()
+            time.sleep(DEFAULT_DELAY)
+            lastest_tab = page.get_by_text("Latest")
+            lastest_tab.click()
 
-        # Delay For Fetching Posts
-        time.sleep(DEFAULT_DELAY)
-        # Fetching All Posts Wrapper
-        posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
-        soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
-        # Fetching all tags containing post links
-        post_info_a_tags = soup.select("a[href*=status]")
-        post_time_elements = soup.select("time")
-        # Fetches Replies | Reposts | Likes | Bookmarks | Views
-        post_views_elements = soup.select("div[role=\"group\"]")
-        # Fetching all links and infos
-        base_url = "https://twitter.com"
-        post_links_lst     = [base_url+a_tag["href"] for a_tag in post_info_a_tags if not "analytics" in a_tag["href"]]
-        post_username_lst  = [a_tag["href"][1:a_tag["href"].find("/", 1)] for a_tag in post_info_a_tags if not "analytics" in a_tag["href"]]
-        post_date_lst      = [time_tag["datetime"][:time_tag["datetime"].find("T")] for time_tag in post_time_elements]
-        post_time_lst      = [time_tag["datetime"][time_tag["datetime"].find("T")+1:time_tag["datetime"].find(".")] for time_tag in post_time_elements]
-        post_replies_lst   = []
-        post_reposts_lst   = []
-        post_likes_lst     = []
-        post_bookmarks_lst = []
-        post_views_lst     = []
-        for a_tag in post_views_elements:
-            replies, reposts, likes, bookmarks, views = [0 for _ in range(5)]
-            # Checking if multiple elements
-            if ", " in a_tag["aria-label"]:
-                infos_lst = a_tag["aria-label"].split(", ")
-                for info in infos_lst:
-                    if "replie" in info:
-                        replies = int(info.split(" ")[0])  
-                    elif "repost" in info:
-                        reposts = int(info.split(" ")[0])
-                    elif "like" in info:
-                        likes = int(info.split(" ")[0])
-                    elif "bookmark" in info:
-                        bookmarks = int(info.split(" ")[0])
-                    elif "view" in info:
-                        views = int(info.split(" ")[0])    
-            post_replies_lst.append(replies)
-            post_reposts_lst.append(reposts)
-            post_likes_lst.append(likes)
-            post_bookmarks_lst.append(bookmarks)
-            post_views_lst.append(views)
-
-        # Compacting data into a dictionary
-        data_dict = {"url":post_links_lst, "username":post_username_lst, "date-post":post_date_lst, "time-post":post_time_lst, "replies":post_replies_lst, "reposts":post_reposts_lst, "likes":post_likes_lst, "bookmarks":post_bookmarks_lst, "views":post_views_lst}
-        print(data_dict)
-        df = pd.DataFrame(data_dict)
-        df.to_excel("posts_info.xlsx", index=False)
-
-        # time.sleep(10000)
+            # Delay For Fetching Posts
+            time.sleep(DEFAULT_DELAY)
+            # Start infinite scrolling until we reach the end of the page
+            df_lst = []
+            prev_height = None
+            while True: #make the range as long as needed
+                # Fetching All Posts Wrapper
+                posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
+                soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
+                df_lst.append(extract_tweets_to_df(soup))
+                # Fetching current page height
+                curr_height = page.evaluate('(window.innerHeight + window.scrollY)')
+                # The first argument is horizontal scroll | second argument is vertical scroll (positive = down | negative = up)
+                page.mouse.wheel(0, 15000)
+                time.sleep(DEFAULT_DELAY*random.randint(10,30))
+                # Starting the scroll
+                if not prev_height:
+                    prev_height = curr_height
+                    time.sleep(DEFAULT_DELAY*2)
+                # Case where the scroll did not create any effects (meaning we have reached the end of the page)
+                elif prev_height == curr_height:
+                    break
+                # If we are mid scrolling and new content has appeared
+                else:
+                    prev_height = curr_height
+                    time.sleep(DEFAULT_DELAY*2)
+            
+            # Generating a single dataframe with all data
+            df = pd.concat(df_lst)
+            # Remove possible duplicates
+            df = df.drop_duplicates(subset=["url"])
+            df.to_excel(f"{os.getcwd()}\\coletas\\{row['keywords']}-{dt.datetime.now().strftime('%d-%m-%Y-%H-%M')}.xlsx", index=False)
 
         browser.close()
 
