@@ -66,6 +66,7 @@ def extract_tweets_to_df(soup):
     post_time_elements = soup.select("a > time")
     # Fetches Replies | Reposts | Likes | Bookmarks | Views
     post_views_elements = soup.select("div[role=\"group\"]")
+    post_text_elements = soup.select("div[data-testid=\"tweetText\"]")
     # Fetching all links and infos
     base_url = "https://twitter.com"
     post_links_lst     = [base_url+a_tag["href"] for a_tag in post_info_a_tags if (not "analytics" in a_tag["href"]) and (a_tag["href"].count("/") == 3)] # Number 3 here, becauce we add +2 with base url, so not 5, in fact 3
@@ -77,6 +78,8 @@ def extract_tweets_to_df(soup):
     post_likes_lst     = []
     post_bookmarks_lst = []
     post_views_lst     = []
+    post_text = []
+
     for a_tag in post_views_elements:
         replies, reposts, likes, bookmarks, views = [0 for _ in range(5)]
         # Checking if multiple elements
@@ -92,12 +95,20 @@ def extract_tweets_to_df(soup):
                 elif "bookmark" in info:
                     bookmarks = int(info.split(" ")[0])
                 elif "view" in info:
-                    views = int(info.split(" ")[0])    
+                    views = int(info.split(" ")[0])
+
         post_replies_lst.append(replies)
         post_reposts_lst.append(reposts)
         post_likes_lst.append(likes)
         post_bookmarks_lst.append(bookmarks)
         post_views_lst.append(views)
+
+    for div in post_text_elements:
+        tweet_text = ""
+        if div.has_attr("id"):
+            for _, child in enumerate(div.children):
+                tweet_text += child.text
+            post_text.append(tweet_text)
 
     # Compacting data into a dictionary
     data_dict = {"url":post_links_lst, 
@@ -108,8 +119,12 @@ def extract_tweets_to_df(soup):
                     "reposts":post_reposts_lst, 
                     "likes":post_likes_lst, 
                     "bookmarks":post_bookmarks_lst, 
-                    "views":post_views_lst}
-    # print(data_dict)
+                    "views":post_views_lst,
+                    "tweet-text":post_text}
+    
+    # Print for debugging
+    # for key, value in data_dict.items():
+    #     print(f"{key}: Len: {len(value)}")
     
     df = pd.DataFrame(data_dict)
     return df
@@ -187,7 +202,7 @@ def scrape_tweets():
                     if attempts >= MAX_ATTEMPTS:
                         errors_lst.append(error_str)
                     continue
-            
+
                 # Latest Tweets Tab
                 time.sleep(DEFAULT_DELAY)
                 try:
@@ -215,6 +230,9 @@ def scrape_tweets():
                         posts_wrapper = page.locator("[aria-label='Timeline: Search timeline']")
                         soup = BeautifulSoup(posts_wrapper.inner_html(), "html.parser")
                         df_lst.append(extract_tweets_to_df(soup))
+                        # Remove these 2 lines down below to normal code execution
+                        # success = True 
+                        # break
                     except Exception as e:
                         error_str = f"Exception: Fetching All Posts Wrapper - N° of attempts: {attempts} - Keyword: {row['keywords']} - {e}"
                         print(error_str)
