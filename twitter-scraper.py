@@ -224,7 +224,7 @@ def scrape_tweets():
             attempts = 0
             success = False
             while attempts < MAX_ATTEMPTS:
-                date_filter = f"since:{row['since']} until:{row['until']}"
+                date_filter = f"since:{row['since'].strftime('%Y-%m-%d')} until:{row['until'].strftime('%Y-%m-%d')}"
                 search_str = f"{row['keywords']} {date_filter}"
                 print(f"Current search: {i} | {search_str}")
                 url_explore = "https://twitter.com/explore"
@@ -319,6 +319,18 @@ def scrape_tweets():
 
 def main():
     scrape_tweets()
+    path = f"{os.getcwd()}\\coletas\\twitter-scraper-coletas-finais-com-texto\\"
+    if not os.path.isdir(path):
+        os.mkdir(path)
+    df_lst = []
+    for file in os.listdir(path):
+        if file.endswith(".xlsx"):
+            print(file)
+            df = pd.read_excel(path+file)
+            df["keywords"] = file.split("-")[0]
+            df_lst.append(df)
+    df_final = pd.concat(df_lst)
+    df_final.to_excel(f"coleta-unificada-{dt.datetime.now().strftime('%d-%m-%Y')}.xlsx", index=False)
 
 if __name__ == "__main__":
     main()
