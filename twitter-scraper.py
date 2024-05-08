@@ -285,7 +285,7 @@ def scrape_tweets():
                     # Fetching current page height
                     curr_height = page.evaluate('(window.innerHeight + window.scrollY)')
                     # The first argument is horizontal scroll | second argument is vertical scroll (positive = down | negative = up)
-                    page.mouse.wheel(0, 1000)
+                    page.mouse.wheel(0, 800)
                     time.sleep(DEFAULT_DELAY*random.randint(1,5))
                     # Starting the scroll
                     if not prev_height:
